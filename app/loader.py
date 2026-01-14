@@ -4,44 +4,48 @@ import json
 
 class DataLoader:
     @staticmethod
-    def load_pdfs(pdf_folder="data/pdfs"):
-        if not os.path.exists(pdf_folder):
-            print(f"PDF folder not found: {pdf_folder}")
-            return []
+    def chunk_text(text, chunk_size=500, overlap=50):
+        """Split text into overlapping chunks."""
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+            chunk = text[start:end]
+            chunks.append(chunk)
+            start += chunk_size - overlap
+        return chunks
 
+    @staticmethod
+    def load_pdfs(pdf_folder="data/pdfs"):
         docs = []
         for filename in os.listdir(pdf_folder):
             if filename.endswith(".pdf"):
                 path = os.path.join(pdf_folder, filename)
-                try:
-                    text = extract_text(path)
-                    if text.strip():  # only add non-empty text
-                        docs.append(text)
-                    else:
-                        print(f"PDF empty: {filename}")
-                except Exception as e:
-                    print(f"Failed to read {filename}: {e}")
+                text = extract_text(path)
+                for i, chunk in enumerate(DataLoader.chunk_text(text)):
+                    docs.append({
+                        "text": chunk,
+                        "source": filename,
+                        "page": i+1
+                    })
         return docs
 
     @staticmethod
     def load_kb_articles(kb_folder="data/kb_articles"):
-        if not os.path.exists(kb_folder):
-            print(f"KB folder not found: {kb_folder}")
-            return []
-
         docs = []
         for filename in os.listdir(kb_folder):
             if filename.endswith(".json"):
                 path = os.path.join(kb_folder, filename)
-                try:
-                    with open(path, "r") as f:
-                        data = json.load(f)
-                        for article in data:
-                            content = article.get("content", "").strip()
-                            if content:
-                                docs.append(content)
-                            else:
-                                print(f"Empty content in {filename}")
-                except Exception as e:
-                    print(f"Failed to read {filename}: {e}")
+                with open(path, "r") as f:
+                    data = json.load(f)
+                    for article in data:
+                        content = article.get("content", "")
+                        title = article.get("title", "")
+                        for i, chunk in enumerate(DataLoader.chunk_text(content)):
+                            docs.append({
+                                "text": chunk,
+                                "title": title,
+                                "source": filename,
+                                "chunk": i+1
+                            })
         return docs
