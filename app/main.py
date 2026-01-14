@@ -1,3 +1,4 @@
+import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 from app.embeddings import Embeddings
@@ -5,45 +6,33 @@ from app.vectorstore import VectorStore
 from app.retrieval import Retrieval
 from app.llm import call_llm
 from app.loader import DataLoader
-import numpy as np
 
-app = FastAPI(title="RAG FastAPI with Robust Loader")
+app = FastAPI()
 
-# Load documents
-pdf_docs = DataLoader.load_pdfs()
-kb_docs = DataLoader.load_kb_articles()
-all_docs = pdf_docs + kb_docs
-
-if not all_docs:
-    raise ValueError(
-        "No documents loaded! Check your PDF folder and KB JSON files."
-    )
-
-print(f"Total documents loaded: {len(all_docs)}")
-
-# Embeddings
+# Initialize embeddings
 emb_model = Embeddings()
-embeddings = emb_model.encode(all_docs)
+dimension = emb_model.model.get_sentence_embedding_dimension()
 
-# Ensure embeddings are 2D numpy array
-embeddings = np.array(embeddings)
-if len(embeddings.shape) != 2:
-    raise ValueError("Embeddings must be 2D. Check the documents loaded.")
+# Initialize vector store with persistence paths
+vector_store = VectorStore(dimension=dimension)
 
-print(f"Embeddings shape: {embeddings.shape}")
+# Load persistent index if exists, else build it
+if os.path.exists(vector_store.persist_path) and os.path.exists(vector_store.meta_path):
+    vector_store.load()
+else:
+    pdf_docs = DataLoader.load_pdfs()
+    kb_docs = DataLoader.load_kb_articles()
+    all_docs = pdf_docs + kb_docs
+    embeddings = emb_model.encode([d["text"] for d in all_docs])
+    vector_store.add_texts(all_docs, embeddings)
+    vector_store.save()
 
-# Vector Store
-vector_store = VectorStore(dimension=embeddings.shape[1])
-vector_store.add_texts(all_docs, embeddings)
-
-# Request model
 class QueryRequest(BaseModel):
     question: str
 
 @app.post("/ask")
 def ask_rag(req: QueryRequest):
     query_emb = emb_model.encode([req.question])
-    query_emb = np.array(query_emb)
     docs = vector_store.search(query_emb, top_k=3)
     prompt = Retrieval.build_prompt(docs, req.question)
     answer = call_llm(prompt)

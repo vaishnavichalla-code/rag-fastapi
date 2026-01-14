@@ -1,14 +1,17 @@
 class Retrieval:
     @staticmethod
     def build_prompt(docs, question):
-        context = "\n".join(docs)
-        return f"""
-Answer the question using ONLY the context below.
-If the answer is not found in the context, say "I don't know".
+        # context = "\n".join(docs)
+        context = "\n".join([doc["text"] if isinstance(doc, dict) else doc for doc in docs])
 
-Context:
-{context}
+        prompt = f"""
+        Answer the question using ONLY the context below.
+        If not found, say "I don't know".
 
-Question:
-{question}
-"""
+        Context:
+        {context}
+
+        Question:
+        {question}
+        """
+        return prompt
