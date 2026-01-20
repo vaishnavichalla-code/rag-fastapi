@@ -1,10 +1,14 @@
 import os
-import requests
-from pdfminer.high_level import extract_text
 import json
 import base64
+import requests
+from pdfminer.high_level import extract_text
+from urllib.parse import urlparse, parse_qs, unquote
+
 
 class DataLoader:
+
+    # ---------------- TEXT CHUNKING ----------------
     @staticmethod
     def chunk_text(text, chunk_size=500, overlap=50):
         chunks = []
@@ -16,7 +20,7 @@ class DataLoader:
             start += chunk_size - overlap
         return chunks
 
-    # ---------------- PDF Loading ----------------
+    # ---------------- PDF LOADER ----------------
     @staticmethod
     def load_pdfs(pdf_folder="data/pdfs"):
         docs = []
@@ -28,11 +32,11 @@ class DataLoader:
                     docs.append({
                         "text": chunk,
                         "source": filename,
-                        "page": i+1
+                        "page": i + 1
                     })
         return docs
 
-    # ---------------- Local KB JSON (Optional Backup) ----------------
+    # ---------------- LOCAL KB JSON ----------------
     @staticmethod
     def load_local_kb(kb_folder="data/kb_articles"):
         docs = []
@@ -49,48 +53,81 @@ class DataLoader:
                                 "text": chunk,
                                 "title": title,
                                 "source": filename,
-                                "chunk": i+1
+                                "chunk": i + 1
                             })
         return docs
 
-    # ---------------- ServiceNow KB API ----------------
+    # ---------------- SERVICENOW QUERY EXTRACTOR ----------------
     @staticmethod
-   
+    def extract_sysparm_query(input_str: str) -> str:
+        """
+        Accepts:
+        - Raw query
+        - Encoded query
+        - Full ServiceNow UI URL
+        Returns clean sysparm_query
+        """
+        # If full URL pasted
+        if "sysparm_query" in input_str:
+            decoded = unquote(input_str)
+            parsed = urlparse(decoded)
+            params = parse_qs(parsed.query)
+            query = params.get("sysparm_query", [""])[0]
+        else:
+            query = input_str
 
-    def load_servicenow_kb(instance_url, user, password):
-        url = f"{instance_url}/api/now/table/kb_knowledge"
+        # Decode repeatedly until stable
+        while "%3D" in query or "%253D" in query:
+            query = unquote(query)
+
+        return query
+
+    # ---------------- SERVICENOW KB LOADER ----------------
+    @staticmethod
+    def load_servicenow_kb(
+        instance_url: str,
+        user: str,
+        password: str,
+        query: str = "workflow_state=published",
+        limit: int = 1000
+    ):
+        url = f"{instance_url.rstrip('/')}/api/now/table/kb_knowledge"
+
+        # 🔥 FIX: extract + decode query safely
+        query = DataLoader.extract_sysparm_query(query)
+
         auth_str = f"{user}:{password}"
         encoded_auth = base64.b64encode(auth_str.encode()).decode()
+
         headers = {
-        "Accept": "application/json",
-        "Authorization": f"Basic {encoded_auth}"
-            }
-        print("headers:", headers)
-        params = {
-            "sysparm_query": "workflow_state=published",
-            "sysparm_fields": "sys_id,short_description,text",
-            "sysparm_limit": 1000
+            "Accept": "application/json",
+            "Authorization": f"Basic {encoded_auth}"
         }
 
-        response = requests.get(
-        url,
-        headers=headers,
-        params=params,
-        timeout=30
-        )
+        params = {
+            "sysparm_query": query,
+            "sysparm_fields": "sys_id,short_description,text",
+            "sysparm_limit": limit
+        }
 
-        print("ServiceNow Status:", response.status_code)
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+
+        print("Final sysparm_query:", query)
+        print("ServiceNow status:", response.status_code)
 
         if response.status_code != 200:
-            print("ServiceNow Raw Response:", response.text)
-            raise Exception(f"ServiceNow API error: {response.status_code}")
+            raise Exception(f"ServiceNow API error {response.status_code}: {response.text}")
 
-        result = response.json()["result"]
+        result = response.json().get("result", [])
 
         docs = []
         for r in result:
+            text = f"{r.get('short_description','')}\n{r.get('text','')}".strip()
+            if not text:
+                continue
+
             docs.append({
-                "text": f"{r.get('short_description','')}\n{r.get('text','')}",
+                "text": text,
                 "source": "ServiceNow",
                 "sys_id": r["sys_id"],
                 "title": r.get("short_description")
@@ -98,4 +135,3 @@ class DataLoader:
 
         print(f"Loaded {len(docs)} ServiceNow KB articles")
         return docs
-
